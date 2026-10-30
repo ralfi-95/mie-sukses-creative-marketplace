@@ -232,7 +232,7 @@ For each upload, validate:
 
 Reject executable files and unsupported file types. Never trust a client-provided storage path as proof of ownership.
 
-Exact file size limits, supported formats, and image-dimension rules must be finalized in `architecture.md` or a dedicated media specification before implementation.
+The current upload limit is 12 MiB per file. Avatars and service thumbnails accept PNG, JPEG, or WebP; application documents and deliverables also accept PDF, DOC, and DOCX. The server checks MIME type and file signatures, including DOCX content. No image-dimension validation is currently implemented.
 
 ### Storage access
 
@@ -243,13 +243,13 @@ Exact file size limits, supported formats, and image-dimension rules must be fin
 - Users must not overwrite another user's media.
 - Deleting or replacing a media record must not permit access to unrelated files.
 
-Use private storage and short-lived authorized access URLs where private media requires retrieval. The exact mechanism must be compatible with the chosen local and production storage adapters.
+Keep the production R2 bucket private. Do not issue public object URLs or redirects; Express is the only media gateway and must authorize private reads before opening an object. R2 credentials belong only in Render's server environment. Create R2 tokens scoped to object read/write on the one media bucket. Local development uses the filesystem adapter.
 
 ### Media metadata
 
 Database records must store validated storage keys or paths rather than trusting arbitrary URLs supplied by users.
 
-If a media operation fails midway, the system must be able to retry cleanup without corrupting the associated profile or service.
+Avatar media metadata and `users.avatar_path` are written in one PostgreSQL transaction. If PostgreSQL rejects the metadata operation after a successful object upload, the application attempts to delete the new object. R2 and PostgreSQL cannot share a transaction: a process crash or ambiguous commit/network failure can still leave an orphan object or, rarely, a database reference whose object was compensated. Keep cleanup observable and reconcile these cases operationally; do not delete an object unless its key was newly created.
 
 ## 9. Input, Output, and Web Security
 

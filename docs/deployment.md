@@ -1,7 +1,7 @@
 # Deployment Plan — Mie Sukses Creative Marketplace
 
-**Status:** Draft for review  
-**Priority:** Free-tier deployment, reproducibility, security, and operational simplicity.
+**Status:** Selected production architecture; host configuration and integration verification remain
+**Priority:** Reproducibility, security, and operational simplicity within provider limits.
 
 ## 1. Deployment Goals
 
@@ -17,13 +17,13 @@ The deployment strategy must:
 - Avoid unnecessary infrastructure complexity.
 - Preserve a clear separation between local development and production.
 
-Free-tier availability, resource limits, inactivity policies, and provider terms must be verified before selecting the final hosting configuration.
+Free-tier availability, resource limits, inactivity policies, and provider terms must be checked before configuring or relying on hosted services.
 
 Zero cost cannot be guaranteed indefinitely.
 
 ## 2. Application Components
 
-The application consists of three primary components.
+The application consists of a frontend, backend, database, and object-storage service.
 
 ### 2.1 Frontend
 
@@ -75,6 +75,10 @@ Responsibilities include:
 
 The production database must be persistent. An ephemeral filesystem or temporary application storage must not be used as the primary database.
 
+### 2.4 Object Storage
+
+Production uploads use a private Cloudflare R2 bucket through the backend's S3-compatible storage adapter. Express remains the only upload and download gateway.
+
 ## 3. Environment Strategy
 
 Maintain separate environments.
@@ -89,19 +93,19 @@ Each environment must have independent configuration.
 
 Production secrets must never be copied into local example files, committed to Git, or exposed through frontend environment variables.
 
-## 4. Initial Deployment Strategy
+## 4. Selected Deployment Architecture
 
-The preferred initial architecture is:
+The production topology is:
 
-- Static hosting for the React frontend.
-- A Node.js-compatible hosting service for the Express API.
-- A managed PostgreSQL service for production data.
+- Netlify hosts the React + TypeScript + Vite frontend.
+- Render hosts the Node.js + TypeScript + Express API.
+- Neon hosts the PostgreSQL database.
+- Cloudflare R2 provides one private object bucket accessed through the Express storage adapter.
+- Express sessions and the PostgreSQL session store remain the authentication system.
 
-The exact providers must be selected only after checking current free-tier terms, runtime support, connection limits, database persistence, and project requirements.
+Netlify proxies same-origin `/api/*` and `/media/*` requests to Render before the SPA fallback. The browser does not receive database or R2 credentials and does not connect directly to either service.
 
-Do not select a provider solely because its landing page advertises a free plan.
-
-The final architecture must account for the fact that a free frontend host does not automatically provide a backend runtime or PostgreSQL database.
+Provider limits, current costs, data retention, and recovery options still require verification for the configured accounts. A frontend host does not provide the backend or database automatically, and zero cost is not guaranteed.
 
 ## 5. Frontend Deployment Requirements
 
@@ -109,7 +113,7 @@ The frontend deployment must support:
 
 - Building the Vite application.
 - Serving static assets over HTTPS.
-- Configuring the public API base URL.
+- Same-origin `/api/*` and `/media/*` proxy rewrites to the Render API.
 - SPA route fallback where required by the router.
 - Environment-specific configuration.
 - Deployment from the approved Git repository.
@@ -124,6 +128,8 @@ The frontend must not contain:
 - Production-only administrative secrets.
 
 Any variable exposed to a browser must be treated as public.
+
+Keep the proxy rules before `/* /index.html 200` so API and media requests never receive the SPA document. Replace `RENDER_SERVICE_HOSTNAME` in `public/_redirects` with the actual Render hostname before publishing the site.
 
 ## 6. Backend Deployment Requirements
 
@@ -143,11 +149,13 @@ The API must listen on the port provided by the hosting environment when require
 
 The server must not rely on a developer's local filesystem or machine remaining online.
 
-If the chosen host sleeps when idle, document the resulting cold-start behavior.
+For the approved Render deployment, build with `npm ci --include=dev && npm run build` and start with `npm start`. Set `NODE_ENV=production`, `DATABASE_URL`, `SESSION_SECRET`, and `WEB_ORIGIN` in the Render service. Render supplies `PORT`; the server must bind `0.0.0.0` and trust the single Render proxy hop in production. The startup handler must drain HTTP requests and close the PostgreSQL pool after SIGTERM or SIGINT.
+
+If the Render service sleeps when idle, document the resulting cold-start behavior.
 
 ## 7. PostgreSQL Deployment Requirements
 
-The production database must provide:
+The Neon production database must provide:
 
 - Persistent storage.
 - Supported PostgreSQL connectivity.
@@ -158,7 +166,9 @@ The production database must provide:
 - A clear migration workflow.
 - Monitoring or usage visibility.
 
-Before selecting a provider, verify:
+For the existing Neon production database, verify the configured project, branch, database, and access controls before any approved production operation. Do not substitute local PostgreSQL for production checks.
+
+Review and document:
 
 - Whether its free tier is currently available.
 - Storage limits.
@@ -170,46 +180,35 @@ Before selecting a provider, verify:
 
 Do not assume that a free database remains available forever or that an inactive project will remain online.
 
-## 8. Supabase as a Possible Production Option
+## 8. Neon PostgreSQL
 
-Supabase may be evaluated as a managed PostgreSQL provider and, if deliberately selected, as a provider for authentication or object storage.
+The application uses the existing Neon PostgreSQL production branch through the standard `pg` driver. Configure the pooled `DATABASE_URL` for runtime and the direct `DATABASE_URL_UNPOOLED` for migrations. Both remain server-side; neither belongs in Netlify or a `VITE_` variable.
 
-However:
+Neon provides PostgreSQL only in this architecture. The application does not use Neon Auth or Neon Object Storage. Local development continues to use the existing local PostgreSQL setup.
 
-- Local PostgreSQL remains the initial development database.
-- Local PostgreSQL does not automatically provide Supabase Auth or Storage.
-- Authentication and storage integrations must be implemented through explicit adapters.
-- A Supabase project must not be selected or modified without the user's approval.
-- The previous Supabase project's credentials, migrations, and configuration must not be reused by assumption.
-- Remote migrations, SQL execution, policy changes, storage changes, and resource deletion require explicit approval.
-
-If the production database uses Supabase, document the exact project and environment configuration separately from local development.
+The migration command is a schema-changing operation. Review its target and migration plan and obtain approval before running it against Neon. Never reset or overwrite the production branch.
 
 ## 9. Authentication and Sessions
 
-The production authentication strategy must be finalized before deployment.
+The application uses Express authentication with password hashes and PostgreSQL-backed sessions (`connect-pg-simple`). The implementation defines:
 
-The chosen implementation must define:
-
-- How passwords are stored or delegated to an identity provider.
+- How passwords are stored.
 - How sessions are created and verified.
 - How logout and session revocation work.
 - How deactivated accounts are blocked.
 - How roles are assigned and checked.
 - How frontend authentication state is refreshed.
-- How authentication secrets are rotated.
+- How session secrets are configured and rotated.
 
 The frontend must never be the sole authority for deciding whether a user is an administrator or seller.
 
-The production authentication implementation must satisfy the same business authorization rules as the local implementation.
+Local and production environments use the same Express authentication and authorization behavior, with environment-specific database URLs and secure cookies over production HTTPS. Render's trusted proxy configuration supports secure cookies behind its HTTPS ingress.
 
 ## 10. Media Storage
 
-Uploaded images require an explicit storage strategy.
+Local development uses the filesystem adapter. Production uses a private Cloudflare R2 bucket through the AWS S3-compatible client. All uploads and downloads pass through Express; no public bucket access or direct browser upload is used.
 
-Do not rely on a temporary backend filesystem if the hosting platform does not guarantee persistence.
-
-The selected storage implementation must define:
+The storage implementation defines:
 
 - Allowed file formats.
 - Maximum upload size.
@@ -221,24 +220,21 @@ The selected storage implementation must define:
 - Cleanup of orphaned files.
 - Production storage credentials.
 
-Possible approaches include a provider-managed object store or another persistent storage service that fits the selected deployment.
-
-The provider and exact file limits remain open decisions until verified.
+The current per-file upload limit is 12 MiB. The server validates the supported types and file signatures, assigns UUID object keys, checks ownership and publication visibility, and streams private files only after authorization. R2 credentials are configured only on Render.
 
 ## 11. Environment Variables
 
 Maintain an `.env.example` file containing variable names and safe placeholder values only.
 
-Potential configuration categories include:
+The current host configuration uses:
 
 - Application environment.
-- Frontend public API URL.
+- Netlify proxy rules; no browser database or storage credentials.
 - Backend port.
 - Database connection URL.
-- Authentication configuration.
-- Session or token secrets, if applicable.
-- CORS allowed origins.
-- Media storage configuration.
+- `SESSION_SECRET` and exact `WEB_ORIGIN` on Render.
+- Pooled `DATABASE_URL` and direct `DATABASE_URL_UNPOOLED` on the backend/migration environment as appropriate.
+- `R2_ACCOUNT_ID`, `R2_BUCKET_NAME`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, and `R2_REGION` on Render only.
 - Logging configuration.
 
 The actual variable names must match the implementation.
@@ -255,7 +251,7 @@ Production configuration must explicitly define:
 
 - Allowed frontend origins.
 - Credential behavior.
-- Cookie security attributes, if cookie-based sessions are selected.
+- Cookie security attributes for the existing Express sessions.
 - Secure transport requirements.
 - CSRF protections appropriate to the authentication mechanism.
 - Proxy trust configuration where needed.
@@ -263,6 +259,12 @@ Production configuration must explicitly define:
 Do not allow every origin with credentials enabled.
 
 CORS is not a replacement for authentication or authorization.
+
+The frontend uses same-origin Netlify rewrites for `/api/*` and `/media/*` to the Render service, with the SPA fallback listed after those proxy rules in `public/_redirects`. Replace `RENDER_SERVICE_HOSTNAME` in both proxy targets with the hostname assigned by Render before publishing the Netlify site. The proxy preserves the browser-visible origin, allowing the PostgreSQL-backed session cookie to remain `HttpOnly`, `Secure` in production, and `SameSite=Lax`. Set `WEB_ORIGIN` to the exact Netlify site origin. If direct cross-origin API access is used instead, configure one exact `WEB_ORIGIN`; use HTTPS domains under the same site so `SameSite=Lax` cookies can be sent, and do not use wildcard credentialed CORS.
+
+The application applies in-memory per-process limits to registration, login, uploads, role applications, checkout, public catalog reads, media reads, and health checks. Authenticated uploads, role applications, and checkout also have per-user limits. These buckets reset on restart and are not shared across Render instances; they can be bypassed by distributed clients and do not guarantee DDoS protection. Do not add a shared paid store solely for this safeguard. Configure Cloudflare edge rate limiting/WAF separately if needed; this repository does not configure it. Edge controls can reduce abusive requests reaching Render, but application limits cannot prevent all traffic from reaching the infrastructure.
+
+All client uploads pass through the authenticated Express API and server-generated UUID object keys; the private R2 bucket does not provide direct browser upload access. Private media downloads remain authorization-checked by Express. Application limits can reduce routine abuse, but they are not an R2 spending cap: the free allowance is not a hard limit, and budget alerts do not automatically stop spending. Review R2 usage and configure provider-side alerts separately.
 
 HTTPS must be used for production user traffic and sensitive service connections.
 
@@ -370,7 +372,7 @@ Do not automatically reverse a database migration if doing so could destroy vali
 
 The initial target is zero monthly hosting cost.
 
-Before choosing providers, compare their current offerings against:
+Review the current selected providers' offerings against:
 
 - Static frontend hosting.
 - Persistent Node.js backend hosting.
@@ -381,7 +383,7 @@ Before choosing providers, compare their current offerings against:
 - Sleep or inactivity policies.
 - Backup and recovery capabilities.
 
-If no combination satisfies the requirements reliably at zero cost, document the trade-offs before choosing a fallback.
+If the selected combination cannot satisfy the requirements at zero cost, document the trade-offs before changing providers or enabling paid resources.
 
 Do not enable paid resources or incur charges without explicit approval.
 
@@ -400,21 +402,16 @@ Deployment is considered complete only when:
 - Backup and recovery limitations are documented.
 - Actual costs and free-tier restrictions are disclosed.
 
-## 20. Open Decisions
+## 20. Remaining Deployment Tasks
 
-The following must be finalized before deployment:
+The providers and application architecture are selected. Before public launch:
 
-- Frontend hosting provider.
-- Backend hosting provider.
-- Managed PostgreSQL provider.
-- Production authentication implementation.
-- Persistent media storage provider.
-- Session and cookie strategy.
-- Migration execution process.
-- Backup and recovery approach.
-- Provider-specific resource limits and costs.
-
-These choices must be verified against current provider documentation before implementation.
+- Replace the Render hostname placeholder in `public/_redirects` after the Render service exists.
+- Configure the required environment variables on Render and keep all database and R2 credentials server-side.
+- Configure the Netlify build and publish settings and verify the proxy rules precede the SPA fallback.
+- Review backup, recovery, retention, resource limits, and current provider costs.
+- Verify health checks, sessions, uploads, public media, and authorized private downloads against the hosted services.
+- Apply no additional database migrations without a reviewed plan and explicit approval.
 
 ## 21. Safety Boundary
 
@@ -424,4 +421,16 @@ Do not deploy, purchase services, enable paid resources, modify a remote databas
 
 ## Local media storage limitation
 
-Development uploads are stored on the API server's local disk under the configured upload directory. This is suitable only for local development: files are not shared across multiple API instances and can be lost when an ephemeral host is replaced. Before deployment, select persistent private object storage, migrate existing objects without changing their authorized keys, preserve order/application access checks, and validate backup, retention, and cleanup behavior. Simulated checkout, wallet top-ups, refunds, and withdrawals do not move real money and must not be represented as settled external payments.
+Local development uploads remain on the developer's filesystem, may be lost with that machine, and are not migrated to production. Simulated checkout, wallet top-ups, refunds, and withdrawals do not move real money and must not be represented as settled external payments.
+
+Development uploads continue to use the local filesystem under `UPLOAD_DIR`. Production uploads use a private Cloudflare R2 bucket; production startup fails if any required R2 setting is absent. Files are staged temporarily on the API host, validated, uploaded to R2 under their existing UUID filenames, then recorded in PostgreSQL without changing database paths. The four fixed demo SVGs remain ordinary public static assets and are not copied to R2.
+
+### Cloudflare R2 setup
+
+1. In the intended Cloudflare account, create one R2 bucket for marketplace uploads. Keep public access disabled; the application serves both public and private media through Express.
+2. Create an R2 API token scoped to **Object Read & Write** for this bucket only. Do not use account-wide administrative credentials. Store the access key and secret only in Render's backend environment.
+3. Configure these Render environment variable names: `R2_ACCOUNT_ID`, `R2_BUCKET_NAME`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, and `R2_REGION` (`auto`). Do not add them to Netlify or any `VITE_` variable.
+4. Configure the Render service to use Node.js 20 or newer (the AWS S3 SDK runtime requirement) and set the existing backend environment variables.
+5. Deploy the backend after setting the variables. Verify an authenticated upload returns its existing `/media/<UUID filename>` path, then verify permitted public media and an authorized private download through the Render/Netlify Express route. Also verify that an unauthorized private request returns not found. `/api/health` verifies PostgreSQL only; it does not perform an R2 health request.
+
+The API uses conditional object creation so a UUID collision cannot overwrite an existing object. A disconnected upload aborts local/R2 transfer where supported and skips metadata if the transfer was confirmed but the request has already ended; ambiguous network cancellation can still leave an orphan object. PostgreSQL metadata writes are transactional, with best-effort object cleanup when the database rejects a write; object storage and PostgreSQL do not share an atomic transaction, so a crash or ambiguous network failure can leave an orphan or uncertain result. Existing local development uploads are not migrated automatically. Render's local disk is used only for temporary upload staging; it may be discarded after the request and must never be treated as persistent production storage.

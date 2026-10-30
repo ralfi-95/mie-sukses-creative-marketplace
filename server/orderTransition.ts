@@ -2,6 +2,7 @@ import type { Request, Response } from 'express';
 import type { Pool } from 'pg';
 import { z } from 'zod';
 import { canTransitionOrder } from './policies.js';
+import type { MediaStorage } from './storage.js';
 
 const transitionBody=z.object({
  status:z.enum(['accepted','rejected','in_progress','completed']),
@@ -10,7 +11,7 @@ const transitionBody=z.object({
  if(body.status==='rejected'&&!body.reason)ctx.addIssue({code:'custom',path:['reason'],message:'A rejection reason is required.'});
 });
 
-export function createOrderTransitionHandler(db:Pick<Pool,'connect'>){
+export function createOrderTransitionHandler(db:Pick<Pool,'connect'>,storage:MediaStorage){
  return async(req:Request,res:Response)=>{
   const body=transitionBody.parse(req.body),user=res.locals.user as {id:string;role:string},client=await db.connect();
   try{
@@ -34,8 +35,13 @@ export function createOrderTransitionHandler(db:Pick<Pool,'connect'>){
    }
 
    if(body.status==='completed'){
-    const deliverables=await client.query('SELECT 1 FROM order_deliverables WHERE order_id=$1 AND (delivery_url IS NOT NULL OR media_path IS NOT NULL) LIMIT 1',[order.id]);
-    if(!deliverables.rowCount)throw Object.assign(new Error('Seller must submit work before buyer completion.'),{status:409});
+    const deliverables=await client.query('SELECT media_path,delivery_url FROM order_deliverables WHERE order_id=$1',[order.id]);
+    let hasDeliverable=deliverables.rows.some(item=>Boolean(item.delivery_url));
+    for(const item of deliverables.rows){
+     const filename=typeof item.media_path==='string'&&/^\/media\/([0-9a-f-]{36}\.(png|jpg|webp|pdf|doc|docx))$/i.exec(item.media_path)?.[1];
+     if(!hasDeliverable&&filename&&await storage.exists(filename))hasDeliverable=true;
+    }
+    if(!hasDeliverable)throw Object.assign(new Error('Seller must submit work before buyer completion.'),{status:409});
     const payment=await client.query('SELECT * FROM checkout_payments WHERE checkout_batch_id=$1 FOR UPDATE',[order.checkout_batch_id]);
     if(!payment.rowCount||!['simulated','legacy_untracked'].includes(payment.rows[0].status))throw Object.assign(new Error('Payment state is not eligible for completion.'),{status:409});
     if(payment.rows[0].status==='simulated'){

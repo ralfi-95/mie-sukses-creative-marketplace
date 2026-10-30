@@ -1,11 +1,6 @@
 import pg from 'pg';
 import 'dotenv/config';
+import { connectionConfig } from './connectionConfig.js';
 const { Pool } = pg;
-if (!process.env.DATABASE_URL) throw new Error('Set DATABASE_URL in .env for the local mie_sukses_marketplace database.');
-const databaseUrl=new URL(process.env.DATABASE_URL);
-if(databaseUrl.protocol!=='postgres:'&&databaseUrl.protocol!=='postgresql:')throw new Error('DATABASE_URL must use PostgreSQL.');
-if(!['localhost','127.0.0.1','[::1]','::1'].includes(databaseUrl.hostname))throw new Error('Refusing non-local DATABASE_URL; use 127.0.0.1 or localhost.');
-if(databaseUrl.pathname.slice(1)!=='mie_sukses_marketplace')throw new Error('DATABASE_URL must target mie_sukses_marketplace.');
-if(decodeURIComponent(databaseUrl.username)!=='marketplace_app')throw new Error('DATABASE_URL must use the marketplace_app role.');
-export const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 10 });
+export const pool = new Pool(connectionConfig(process.env.DATABASE_URL, 'runtime'));
 export type Db = typeof pool;

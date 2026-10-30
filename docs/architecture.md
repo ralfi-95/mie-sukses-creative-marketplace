@@ -1,20 +1,20 @@
 # System Architecture — Mie Sukses Creative Marketplace
 
-**Status:** Draft for review  
+**Status:** Current implementation and deployment architecture
 **Project:** Mie Sukses Creative Marketplace  
-**Architecture principle:** Local-first, modular, testable, and deployment-independent.
+**Architecture principle:** Local development with a modular application and explicit production providers.
 
 ## 1. Architecture Goals
 
 The system must:
 
-1. Run locally without requiring a Supabase project.
+1. Run locally without requiring hosted services.
 2. Keep application source code, database schema, and migration files under version control.
 3. Separate frontend presentation, backend business logic, and database persistence.
-4. Keep authentication and storage behind explicit adapters.
+4. Keep authentication and storage responsibilities within the backend and storage adapter boundaries.
 5. Avoid unnecessary framework and infrastructure complexity.
 6. Support a free-tier deployment where feasible.
-7. Prevent accidental changes to remote resources.
+7. Prevent accidental changes to remote resources without explicit approval.
 8. Allow local testing before any cloud integration.
 9. Keep business rules consistent between local and production environments.
 
@@ -26,25 +26,17 @@ The project must not depend on an undocumented remote database state.
 Browser
    |
    v
-React + TypeScript + Vite
-   |
-   | HTTPS / JSON API
+Netlify: React + TypeScript + Vite
+   | same-origin /api/* and /media/* proxy
    v
-Backend API
+Render: Express + TypeScript API
+   | pg pooled connection                 | private S3-compatible API
+   v                                      v
+Neon PostgreSQL                     Cloudflare R2
    |
-   +---- Authentication Adapter
-   |
-   +---- Authorization and Business Rules
-   |
-   +---- Media Storage Adapter
-   |
-   v
-PostgreSQL
-   |
-   +---- Application Tables
-   +---- Constraints and Indexes
-   +---- Transactions
-   +---- Audit Records
+   +---- Application data and PostgreSQL-backed Express sessions
+   +---- Constraints, transactions, and audit records
+      Direct PostgreSQL connection is reserved for approved migrations.
 ```
 
 The frontend must communicate with the backend through a defined API contract.
@@ -71,13 +63,13 @@ Dependencies must be added only when they solve an identified need. Avoid instal
 
 ### Backend
 
-**Proposed baseline: Node.js + TypeScript + Express.**
+**Implemented: Node.js + TypeScript + Express.**
 
 Responsibilities:
 
 - Expose REST-style JSON endpoints.
 - Validate request data.
-- Authenticate requests through the selected authentication adapter.
+- Authenticate requests through the existing Express session middleware.
 - Enforce role and ownership rules.
 - Execute business operations and database transactions.
 - Generate trusted prices and order snapshots.
@@ -85,9 +77,7 @@ Responsibilities:
 - Return consistent error responses.
 - Record required audit events.
 
-Use a PostgreSQL-compatible driver or a carefully selected query layer. Database operations must use parameterized queries.
-
-The backend framework and database access library must be confirmed before implementation. Do not introduce a second backend framework or an ORM without an explicit architecture decision.
+The backend uses `pg` with parameterized queries. Do not introduce a second backend framework or an ORM without an explicit architecture decision.
 
 ### Database
 
@@ -96,12 +86,14 @@ The backend framework and database access library must be confirmed before imple
 - Explicit foreign keys, unique constraints, check constraints, and indexes.
 - Transactions for operations that must succeed or fail atomically.
 - Separate development and production database configurations.
+- Local development uses PostgreSQL; production PostgreSQL is hosted by Neon.
+- Runtime uses Neon's pooled `DATABASE_URL`; migrations use the direct `DATABASE_URL_UNPOOLED` connection.
 
-The application must not assume that a local PostgreSQL server contains Supabase-specific schemas, functions, authentication tables, or storage services.
+The application uses ordinary PostgreSQL features and does not depend on provider-specific authentication or storage schemas.
 
 ### Authentication
 
-Authentication must be accessed through a defined adapter interface.
+Authentication uses the existing Express session implementation and PostgreSQL session store in both local and production environments.
 
 The application must distinguish:
 
@@ -110,9 +102,7 @@ The application must distinguish:
 - Application profile data.
 - Role and permission checks.
 
-The production authentication provider must not dictate the structure of unrelated marketplace business logic.
-
-The local authentication implementation must be documented and runnable without a remote Supabase project.
+Neon Auth is not used. Keep identity, session management, profile data, and role checks in the existing Express application.
 
 Do not implement a custom cryptographic protocol or password-hashing algorithm.
 
@@ -126,9 +116,7 @@ Media storage must use a defined adapter interface for:
 - Authorized retrieval.
 - Deletion and cleanup.
 
-Local development must not require Supabase Storage. A local storage adapter may be used initially, provided it enforces the documented access rules.
-
-The production storage provider and migration path must be selected before production media integration.
+Local development uses the filesystem adapter under `UPLOAD_DIR`; production uses the private Cloudflare R2 bucket through the AWS S3-compatible API. Database paths remain `/media/<UUID filename>`; the server maps the filename to a storage key and serves every object through Express. The client receives no storage credentials or direct object URL. Public service media is served only when the service is published and its seller is active; avatars follow the active seller/current-avatar rule. Applications and deliverables are streamed only after the existing owner, reviewer, or order-access checks pass.
 
 ## 4. Application Layer Responsibilities
 
@@ -260,9 +248,7 @@ Rules:
 - Do not treat client-provided user IDs as authenticated identity.
 - Avoid duplicating API business logic in the frontend.
 
-The frontend API base URL must come from environment configuration.
-
-Local development may use separate frontend and backend ports. CORS must be configured for the actual local origins.
+The frontend uses relative `/api` and `/media` paths. Vite proxies them during local development; Netlify proxies them to Render in production before the SPA fallback. The deployed browser uses same-origin requests.
 
 ## 7. Local Development Environment
 
@@ -306,52 +292,36 @@ The repository is the source of truth for schema changes.
 - Seeds must be repeatable where practical.
 - Database reset commands must clearly identify which database they affect.
 
-Local schema development and testing must work without network access to Supabase.
+Local schema development and testing must work without network access to Neon.
 
-A future hosted PostgreSQL database may use a compatible schema, but remote migration execution must be a separately approved deployment action.
+Neon uses the repository's PostgreSQL migrations. Remote migration execution remains a separately approved deployment action.
 
 Do not mix manual dashboard edits with untracked migration history.
 
-## 9. Supabase Integration Boundary
+## 9. Production Providers and Boundaries
 
-Supabase is a possible production infrastructure provider, not a prerequisite for local development.
+The selected production topology is:
 
-Potential production services include:
+- Netlify hosts the static React + Vite frontend.
+- Render hosts the Express + TypeScript API.
+- Neon hosts PostgreSQL.
+- Cloudflare R2 provides one private object bucket through the server-side S3-compatible storage adapter.
+- Express sessions remain the authentication mechanism; Neon Auth is not used.
 
-- Managed PostgreSQL.
-- Supabase Auth.
-- Supabase Storage.
+Netlify rewrites same-origin `/api/*` and `/media/*` requests to Render before applying the React SPA fallback. The browser never receives database or R2 credentials, and it never connects directly to either service.
 
-Each service must be adopted deliberately. The architecture must not assume that selecting Supabase PostgreSQL automatically requires using Supabase Auth, Storage, Edge Functions, or client-side database access.
-
-Before enabling any Supabase integration:
-
-1. Review the current architecture and adapter contracts.
-2. Verify the target project identity.
-3. Verify environment variables and credentials.
-4. Confirm schema compatibility.
-5. Review security and access policies.
-6. Review the deployment and rollback plan.
-7. Obtain explicit user approval for remote changes.
-
-No previous project URL, project reference, access token, migration state, or generated configuration may be reused implicitly.
-
-No Codex task may create or modify remote resources merely because a credential is available.
+Cloud provider configuration and remote data operations require explicit approval. Local development and tests must not silently switch to production resources.
 
 ## 10. Deployment Strategy
 
-The deployment target should use free tiers where practical, while accounting for their limits.
+The deployment target uses free tiers where practical, while accounting for their limits. The selected components are:
 
-Potential deployment components:
+- Frontend: Netlify.
+- Backend: Render.
+- Database: Neon PostgreSQL.
+- Media: a private Cloudflare R2 bucket accessed only through the Express storage adapter.
 
-- Frontend: a static hosting provider such as Netlify or Vercel.
-- Backend: a compatible Node.js hosting provider.
-- Database: a managed PostgreSQL provider, potentially Supabase.
-- Media: a compatible storage provider selected after the media contract is finalized.
-
-The final provider selection must be recorded in `docs/deployment.md`.
-
-Before choosing a provider, verify:
+Before enabling or changing hosted configuration, verify:
 
 - Whether the free tier is currently available.
 - Backend sleep or cold-start behavior.
@@ -377,7 +347,7 @@ Never commit:
 - Database passwords.
 - Production connection strings containing credentials.
 - Authentication signing secrets.
-- Supabase service-role keys.
+- Neon database credentials or Cloudflare R2 credentials.
 - Private storage credentials.
 - Real user credentials or production data.
 
@@ -422,16 +392,10 @@ Prefer the simplest design that satisfies the documented requirements.
 
 Do not add microservices, message brokers, complex caching, or unnecessary infrastructure for the initial marketplace.
 
-## 14. Non-Negotiable Development Boundary
+## 14. Development and Hosted-Resource Boundaries
 
-Until documentation review is complete:
-
-- Do not implement marketplace features.
-- Do not run migrations against a remote database.
-- Do not execute SQL against a remote project.
-- Do not create or modify Supabase resources.
-- Do not reuse the previous Supabase project's configuration.
+- Keep local development and tests isolated from production resources by default.
+- Do not run migrations, execute production SQL, or modify hosted resources without approval for the specific operation.
+- Do not reuse credentials or configuration from unrelated projects.
 - Do not claim that an unexecuted test or deployment succeeded.
-- Do not overwrite existing project files without first inspecting them.
-
-The initial coding task must be a documentation and architecture audit. Implementation may begin only after the user approves the audited plan.
+- Inspect existing files and preserve uncommitted work before making changes.

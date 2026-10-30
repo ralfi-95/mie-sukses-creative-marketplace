@@ -3,32 +3,36 @@ import express, { type Request, type Response, type NextFunction } from 'express
 import session from 'express-session';
 import connectPgSimple from 'connect-pg-simple';
 import bcrypt from 'bcryptjs';
-import multer from 'multer';
-import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import fs from 'node:fs';
-import { z, ZodError } from 'zod';
+import { z } from 'zod';
 import { pool } from './db/pool.js';
-import { MAX_UPLOAD_BYTES, UPLOAD_LIMIT_MESSAGE } from '../shared/uploadLimits.js';
 import { createOrderTransitionHandler } from './orderTransition.js';
 import { createCheckoutHandler } from './checkout.js';
 import { createPaymentAttemptCancellationHandler, createPaymentConfirmationHandler, createPaymentMethodChangeHandler } from './payment.js';
 import { createDeliverableHandler } from './deliverables.js';
 import { createBuyerOrderListHandler, createOrderDetailHandler, createSellerOrderListHandler } from './orderLists.js';
 import { createPersonalWalletHandler, createWalletTopUpCancellationHandler, createWalletTopUpConfirmationHandler, createWalletTopUpHandler, createWalletWithdrawalHandler } from './wallet.js';
-import { canReadDeliverable, canUploadDeliverable, validMediaSignature, validOfficeDocument } from './mediaPolicy.js';
+import { canUploadDeliverable, validMediaSignature, validOfficeDocument } from './mediaPolicy.js';
 import { createAdminIssueListHandler, createMyOrderIssuesHandler, createOrderIssueHandler, createResolveOrderIssueHandler } from './orderIssues.js';
 import { createAdminTransactionHistoryHandler } from './adminTransactions.js';
 import { createAdminRoleApplicationsHandler, createMyRoleApplicationsHandler, createRoleApplicationHandler, createRoleApplicationReviewHandler } from './applications.js';
 import { isValidPhone, normalizePhone } from './contactPhone.js';
 import { createPublicSellerHandler, createServiceDetailHandler, createServiceListHandler } from './catalog.js';
 import { createOrderReviewHandler } from './reviews.js';
-const app=express(); const port=Number(process.env.PORT||3000); const webOrigin=process.env.WEB_ORIGIN||'http://127.0.0.1:5173'; const sessionSecret=process.env.SESSION_SECRET;
+import { createOriginPolicy } from './originPolicy.js';
+import { createIpRateLimiter, createUserRateLimiter } from './rateLimit.js';
+import { createMediaStorage } from './storage.js';
+import { createMediaReadHandler, persistMediaUpload } from './mediaRoutes.js';
+import { createMediaUpload } from './mediaUpload.js';
+import { jsonBodyParser } from './requestLimits.js';
+import { apiErrorHandler } from './apiErrorHandler.js';
+const app=express(); const port=Number(process.env.PORT||3000); const host=process.env.NODE_ENV==='production'?'0.0.0.0':'127.0.0.1'; const webOrigin=process.env.WEB_ORIGIN||'http://127.0.0.1:5173'; const sessionSecret=process.env.SESSION_SECRET;
 if(!sessionSecret||sessionSecret.length<32)throw new Error('SESSION_SECRET must contain at least 32 characters.');
-const mediaRoot=path.resolve(process.env.UPLOAD_DIR||'./storage'); fs.mkdirSync(mediaRoot,{recursive:true});
+const mediaRoot=path.resolve(process.env.UPLOAD_DIR||'./storage'); fs.mkdirSync(mediaRoot,{recursive:true}); const storage=createMediaStorage(process.env,mediaRoot);
 const PgSession=connectPgSimple(session);
-app.disable('x-powered-by'); app.use(express.json({limit:'100kb'}));
-app.use((req,res,next)=>{const changing=['POST','PUT','PATCH','DELETE'].includes(req.method);if((req.headers.origin&&req.headers.origin!==webOrigin)||(changing&&req.headers.origin!==webOrigin))return res.status(403).json({error:'CROSS_ORIGIN',message:'A same-origin request is required.'});next();});
+app.disable('x-powered-by'); if(process.env.NODE_ENV==='production')app.set('trust proxy',1); app.use(jsonBodyParser);
+app.use(createOriginPolicy(webOrigin));
 app.use(session({store:new PgSession({pool,tableName:'user_sessions',createTableIfMissing:false}),secret:sessionSecret,resave:false,saveUninitialized:false,cookie:{httpOnly:true,sameSite:'lax',secure:process.env.NODE_ENV==='production',maxAge:7*24*60*60*1000}}));
 type User={id:string; email:string; display_name:string;role:string;status:string;avatar_path?:string|null;contact_phone?:string|null;portfolio_url?:string|null};
 declare module 'express-session' { interface SessionData { userId?:string } }
@@ -36,60 +40,58 @@ async function current(req:Request):Promise<User|null>{if(!req.session.userId)re
 const auth=(req:Request,res:Response,next:NextFunction)=>{void current(req).then(u=>{if(!u){res.status(401).json({error:'UNAUTHENTICATED'});return;}res.locals.user=u;next();}).catch(next);};
 const role=(...roles:string[])=>[auth,(req:Request,res:Response,next:NextFunction)=>{if(!roles.includes(res.locals.user.role)){res.status(403).json({error:'FORBIDDEN'});return;}next();}];
 const asyncRoute=(fn:(req:Request,res:Response)=>Promise<unknown>)=>(req:Request,res:Response,next:NextFunction)=>{void fn(req,res).catch(next);};
-app.get('/media/:filename',asyncRoute(async(req,res)=>{
- const filename=req.params.filename;
- if(path.basename(filename)!==filename||!/^([0-9a-f-]{36}\.(png|jpg|webp|pdf|doc|docx)|demo-(edit|photo|design|ui)\.svg)$/i.test(filename))return res.status(404).end();
- const objectPath=`/media/${filename}`;
- const result=await pool.query("SELECT m.kind,m.owner_id,u.role,u.status,u.avatar_path,EXISTS(SELECT 1 FROM services s JOIN users seller ON seller.id=s.seller_id WHERE s.thumbnail_path=m.path AND s.status='published' AND seller.status='active') is_public FROM media_uploads m JOIN users u ON u.id=m.owner_id WHERE m.path=$1",[objectPath]);
- if(!result.rowCount)return res.status(404).end();
- const media=result.rows[0];
- let allowed=media.kind==='service'&&media.is_public;
- if(media.kind==='avatar'&&media.role==='seller'&&media.status==='active'&&media.avatar_path===objectPath)allowed=true;
- let user:User|null=null;
- if(media.kind==='deliverable'||media.kind==='application'||!allowed){user=await current(req);if(media.kind==='deliverable'&&user){let hasOrderAccess=false;if(user.id!==media.owner_id){const access=await pool.query('SELECT 1 FROM order_deliverables d JOIN orders o ON o.id=d.order_id WHERE d.media_path=$1 AND ($2=o.buyer_id OR $3=true)',[objectPath,user.id,user.role==='admin']);hasOrderAccess=Boolean(access.rowCount);}allowed=canReadDeliverable(user.id,media.owner_id,hasOrderAccess);}else allowed=Boolean(user&&(user.id===media.owner_id||(media.kind==='application'&&user.role==='admin')));}
- if(!allowed)return res.status(404).end();
- if(media.kind==='deliverable')return res.download(path.join(mediaRoot,filename));
- res.sendFile(path.join(mediaRoot,filename));
-}));
+const healthLimit=createIpRateLimiter({limit:60,windowMs:60*1000});
+const publicApiLimit=createIpRateLimiter({limit:120,windowMs:60*1000});
+const publicMediaLimit=createIpRateLimiter({limit:300,windowMs:60*1000});
+app.get('/media/:filename',publicMediaLimit,createMediaReadHandler(pool,storage,current));
 const categories=[['video-foto-editing','Video & Foto Editing'],['fotografi','Fotografi'],['desain-grafis','Desain Grafis'],['ui-ux-design','UI/UX Design']];
-app.get('/api/health',asyncRoute(async(_req,res)=>{const r=await pool.query('select current_database() db');res.json({ok:true,database:r.rows[0].db});}));
-app.post('/api/auth/register',asyncRoute(async(req,res)=>{const b=z.object({email:z.string().email().max(254),password:z.string().min(10).max(72),displayName:z.string().trim().min(2).max(80),contactPhone:z.string({required_error:'Enter your phone number.'}).trim().min(1,'Enter your phone number.').max(30).refine(isValidPhone,{message:'Enter a valid phone number.'})}).parse(req.body);await new Promise<void>((resolve,reject)=>req.session.regenerate(err=>err?reject(err):resolve()));const hash=await bcrypt.hash(b.password,12),phone=b.contactPhone?normalizePhone(b.contactPhone):null;const r=await pool.query('INSERT INTO users(email,password_hash,display_name,contact_phone) VALUES(lower($1),$2,$3,$4) RETURNING id,email,display_name,role,status,contact_phone',[b.email,hash,b.displayName,phone]);req.session.userId=r.rows[0].id;res.status(201).json({user:r.rows[0]});}));
-app.post('/api/auth/login',asyncRoute(async(req,res)=>{const b=z.object({email:z.string().email(),password:z.string().min(1).max(72)}).parse(req.body);const r=await pool.query('SELECT id,email,display_name,role,status,password_hash FROM users WHERE email=lower($1)',[b.email]);if(!r.rowCount||r.rows[0].status!=='active'||!await bcrypt.compare(b.password,r.rows[0].password_hash))return res.status(401).json({error:'INVALID_CREDENTIALS'});req.session.regenerate(err=>{if(err)return res.status(500).json({error:'SESSION_ERROR'});req.session.userId=r.rows[0].id;res.json({user:{id:r.rows[0].id,email:r.rows[0].email,display_name:r.rows[0].display_name,role:r.rows[0].role,status:r.rows[0].status}});});}));
+app.get('/api/health',healthLimit,async(_req,res)=>{try{await pool.query('SELECT 1');res.json({ok:true});}catch{res.status(503).json({ok:false});}});
+const registrationLimit=createIpRateLimiter({limit:10,windowMs:60*60*1000});
+const loginLimit=createIpRateLimiter({limit:20,windowMs:15*60*1000});
+const uploadLimit=createIpRateLimiter({limit:30,windowMs:60*60*1000});
+const uploadUserLimit=createUserRateLimiter({limit:30,windowMs:60*60*1000});
+const checkoutIpLimit=createIpRateLimiter({limit:60,windowMs:60*1000});
+const checkoutUserLimit=createUserRateLimiter({limit:10,windowMs:60*1000});
+const applicationIpLimit=createIpRateLimiter({limit:20,windowMs:60*60*1000});
+const applicationUserLimit=createUserRateLimiter({limit:5,windowMs:60*60*1000});
+const upload=createMediaUpload(mediaRoot);
+app.post('/api/auth/register',registrationLimit,asyncRoute(async(req,res)=>{const b=z.object({email:z.string().email().max(254),password:z.string().min(10).max(72),displayName:z.string().trim().min(2).max(80),contactPhone:z.string({error:issue=>issue.input===undefined?'Enter your phone number.':undefined}).trim().min(1,'Enter your phone number.').max(30).refine(isValidPhone,{message:'Enter a valid phone number.'})}).parse(req.body);await new Promise<void>((resolve,reject)=>req.session.regenerate(err=>err?reject(err):resolve()));const hash=await bcrypt.hash(b.password,12),phone=b.contactPhone?normalizePhone(b.contactPhone):null;const r=await pool.query('INSERT INTO users(email,password_hash,display_name,contact_phone) VALUES(lower($1),$2,$3,$4) RETURNING id,email,display_name,role,status,contact_phone',[b.email,hash,b.displayName,phone]);req.session.userId=r.rows[0].id;res.status(201).json({user:r.rows[0]});}));
+app.post('/api/auth/login',loginLimit,asyncRoute(async(req,res)=>{const b=z.object({email:z.string().email(),password:z.string().min(1).max(72)}).parse(req.body);const r=await pool.query('SELECT id,email,display_name,role,status,password_hash FROM users WHERE email=lower($1)',[b.email]);if(!r.rowCount||r.rows[0].status!=='active'||!await bcrypt.compare(b.password,r.rows[0].password_hash))return res.status(401).json({error:'INVALID_CREDENTIALS'});req.session.regenerate(err=>{if(err)return res.status(500).json({error:'SESSION_ERROR'});req.session.userId=r.rows[0].id;res.json({user:{id:r.rows[0].id,email:r.rows[0].email,display_name:r.rows[0].display_name,role:r.rows[0].role,status:r.rows[0].status}});});}));
 app.post('/api/auth/logout',auth,asyncRoute(async(req,res)=>req.session.destroy(()=>res.status(204).end())));
 app.get('/api/auth/me',asyncRoute(async(req,res)=>{const user=await current(req);res.json({user});}));
-app.get('/api/categories',asyncRoute(async(_req,res)=>res.json({categories:(await pool.query('SELECT id,slug,name FROM categories WHERE is_active ORDER BY name')).rows})));
-app.get('/api/services',asyncRoute(createServiceListHandler(pool)));
-app.get('/api/services/:id',asyncRoute(createServiceDetailHandler(pool)));
-app.get('/api/sellers/:id',asyncRoute(createPublicSellerHandler(pool)));
-const mediaExtensions:Record<string,string>={'image/png':'.png','image/jpeg':'.jpg','image/webp':'.webp','application/pdf':'.pdf','application/msword':'.doc','application/vnd.openxmlformats-officedocument.wordprocessingml.document':'.docx'};
-const upload=multer({storage:multer.diskStorage({destination:(_req,_file,cb)=>cb(null,mediaRoot),filename:(_req,file,cb)=>cb(null,`${randomUUID()}${mediaExtensions[file.mimetype]||'.bin'}`),}),limits:{fileSize:MAX_UPLOAD_BYTES,files:1},fileFilter:(_req,file,cb)=>cb(null,Object.hasOwn(mediaExtensions,file.mimetype))});
-app.post('/api/media',auth,upload.single('file'),asyncRoute(async(req,res)=>{
- if(!req.file)return res.status(400).json({error:'INVALID_FILE'});
+app.get('/api/categories',publicApiLimit,asyncRoute(async(_req,res)=>res.json({categories:(await pool.query('SELECT id,slug,name FROM categories WHERE is_active ORDER BY name')).rows})));
+app.get('/api/services',publicApiLimit,asyncRoute(createServiceListHandler(pool)));
+app.get('/api/services/:id',publicApiLimit,asyncRoute(createServiceDetailHandler(pool)));
+app.get('/api/sellers/:id',publicApiLimit,asyncRoute(createPublicSellerHandler(pool)));
+app.post('/api/media',uploadLimit,auth,uploadUserLimit,upload,asyncRoute(async(req,res)=>{
+ if(!req.file)return res.status(400).json({error:'INVALID_FILE',message:'The file type or content is not supported for this upload.'});
+ const uploadController=new AbortController();
+ const abortUpload=()=>{if(!res.writableEnded)uploadController.abort();};
+ res.once('close',abortUpload);
+ try {
+ if(req.aborted||res.destroyed)return;
  const bytes=await fs.promises.readFile(req.file.path);
  const kindSchema=z.enum(['avatar','service','deliverable','application']);
  const parsed=kindSchema.safeParse(req.body.kind);
- if(!parsed.success){await fs.promises.unlink(req.file.path);return res.status(400).json({error:'INVALID_MEDIA_PURPOSE'});}
+ if(!parsed.success)return res.status(400).json({error:'INVALID_MEDIA_PURPOSE'});
  const kind=parsed.data,user=res.locals.user;
  const imageMime=['image/png','image/jpeg','image/webp'].includes(req.file.mimetype);
  const standardFile=(imageMime||req.file.mimetype==='application/pdf')&&validMediaSignature(bytes);
  const officeFile=['deliverable','application'].includes(kind)&&validOfficeDocument(bytes,req.file.mimetype);
- if((!standardFile&&!officeFile)||(['avatar','service'].includes(kind)&&!imageMime)){await fs.promises.unlink(req.file.path);return res.status(400).json({error:'INVALID_FILE'});}
- if(kind==='service'&&user.role!=='seller'){await fs.promises.unlink(req.file.path);return res.status(403).json({error:'FORBIDDEN'});}
- if(kind==='application'&&!['buyer','seller'].includes(user.role)){await fs.promises.unlink(req.file.path);return res.status(403).json({error:'FORBIDDEN'});}
+ if((!standardFile&&!officeFile)||(['avatar','service'].includes(kind)&&!imageMime))return res.status(400).json({error:'INVALID_FILE',message:'The file type or content is not supported for this upload.'});
+ if(kind==='service'&&user.role!=='seller')return res.status(403).json({error:'FORBIDDEN'});
+ if(kind==='application'&&!['buyer','seller'].includes(user.role))return res.status(403).json({error:'FORBIDDEN'});
  let orderId:string|null=null;
  if(kind==='deliverable'){
   const id=z.string().uuid().safeParse(req.body.orderId);
-  if(user.role!=='seller'||!id.success){await fs.promises.unlink(req.file.path);return res.status(403).json({error:'FORBIDDEN'});}
+  if(user.role!=='seller'||!id.success)return res.status(403).json({error:'FORBIDDEN'});
   const order=await pool.query('SELECT seller_id,status FROM orders WHERE id=$1',[id.data]);
-  if(!order.rowCount||!canUploadDeliverable(user.role,user.id,order.rows[0].seller_id,order.rows[0].status)){await fs.promises.unlink(req.file.path);return res.status(409).json({error:'ORDER_NOT_READY_FOR_DELIVERY'});}
+  if(!order.rowCount||!canUploadDeliverable(user.role,user.id,order.rows[0].seller_id,order.rows[0].status))return res.status(409).json({error:'ORDER_NOT_READY_FOR_DELIVERY'});
   orderId=id.data;
  }
- const objectPath=`/media/${req.file.filename}`;
- try{
-  await pool.query('INSERT INTO media_uploads(path,owner_id,kind,order_id) VALUES($1,$2,$3,$4)',[objectPath,user.id,kind,orderId]);
-  if(kind==='avatar')await pool.query('UPDATE users SET avatar_path=$1 WHERE id=$2',[objectPath,user.id]);
- }catch(error){await fs.promises.unlink(req.file.path);throw error;}
- res.status(201).json({path:objectPath});
+ await persistMediaUpload(storage,pool,{filename:req.file.filename,path:req.file.path,contentType:req.file.mimetype,contentLength:req.file.size,ownerId:user.id,kind,orderId},uploadController.signal);
+ res.status(201).json({path:`/media/${req.file.filename}`});
+ } finally { res.off('close',abortUpload); await fs.promises.unlink(req.file.path).catch(()=>console.error('Temporary upload cleanup failed.')); }
 }));
 app.put('/api/profile',auth,asyncRoute(async(req,res)=>{const b=z.object({displayName:z.string().trim().min(2).max(80).optional(),contactPhone:z.string().trim().min(1).max(30).optional().refine(value=>value===undefined||isValidPhone(value),{message:'Enter a valid Indonesian phone number.'})}).refine(value=>value.displayName!==undefined||value.contactPhone!==undefined);const profile=b.parse(req.body),phone=profile.contactPhone?normalizePhone(profile.contactPhone):null;const r=await pool.query('UPDATE users SET display_name=coalesce($1,display_name),contact_phone=coalesce($2,contact_phone) WHERE id=$3 RETURNING id,email,display_name,role,status,avatar_path,contact_phone',[profile.displayName||null,phone,res.locals.user.id]);res.json({user:r.rows[0]});}));
 app.put('/api/profile/password',auth,asyncRoute(async(req,res)=>{const b=z.object({currentPassword:z.string().min(1).max(72),newPassword:z.string().min(10).max(72)}).parse(req.body),client=await pool.connect();try{await client.query('BEGIN');const row=await client.query('SELECT password_hash FROM users WHERE id=$1 FOR UPDATE',[res.locals.user.id]);if(!row.rowCount||!await bcrypt.compare(b.currentPassword,row.rows[0].password_hash))throw Object.assign(new Error('Current password is incorrect.'),{status:400,code:'INVALID_CURRENT_PASSWORD'});await client.query('UPDATE users SET password_hash=$1 WHERE id=$2',[await bcrypt.hash(b.newPassword,12),res.locals.user.id]);await client.query('COMMIT');res.json({ok:true});}catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}}));
@@ -101,7 +103,7 @@ app.post('/api/wallet/topups/:sessionId/cancel',auth,asyncRoute(createWalletTopU
 app.post('/api/wallet/withdrawals',auth,asyncRoute(createWalletWithdrawalHandler(pool)));
 app.post('/api/cart/:serviceId',auth,asyncRoute(async(req,res)=>{const id=res.locals.user.id;const s=await pool.query("SELECT s.id,s.seller_id FROM services s JOIN users u ON u.id=s.seller_id JOIN categories c ON c.id=s.category_id WHERE s.id=$1 AND s.status='published' AND u.status='active' AND u.role='seller' AND c.is_active",[req.params.serviceId]);if(!s.rowCount)return res.status(404).json({error:'SERVICE_UNAVAILABLE'});if(s.rows[0].seller_id===id)return res.status(409).json({error:'OWN_SERVICE'});const c=await pool.query('INSERT INTO carts(buyer_id) VALUES($1) ON CONFLICT(buyer_id) DO UPDATE SET updated_at=now() RETURNING id',[id]);try{await pool.query('INSERT INTO cart_items(cart_id,service_id) VALUES($1,$2)',[c.rows[0].id,req.params.serviceId]);}catch(e){if((e as {code?:string}).code==='23505')return res.status(409).json({error:'ALREADY_IN_CART'});throw e;}res.status(201).json({ok:true});}));
 app.delete('/api/cart/:serviceId',auth,asyncRoute(async(req,res)=>{await pool.query('DELETE FROM cart_items i USING carts c WHERE i.cart_id=c.id AND c.buyer_id=$1 AND i.service_id=$2',[res.locals.user.id,req.params.serviceId]);res.status(204).end();}));
-app.post('/api/checkout',auth,asyncRoute(createCheckoutHandler(pool)));
+app.post('/api/checkout',checkoutIpLimit,auth,checkoutUserLimit,asyncRoute(createCheckoutHandler(pool)));
 app.post('/api/checkout/:batchId/payment/confirm',auth,asyncRoute(createPaymentConfirmationHandler(pool)));
 app.post('/api/checkout/:batchId/payment/cancel',auth,asyncRoute(createPaymentAttemptCancellationHandler(pool)));
 app.post('/api/checkout/:batchId/payment-method',auth,asyncRoute(createPaymentMethodChangeHandler(pool)));
@@ -109,11 +111,11 @@ app.get('/api/buyer/orders',auth,asyncRoute(createBuyerOrderListHandler(pool)));
 app.get('/api/orders',auth,asyncRoute(createBuyerOrderListHandler(pool)));
 app.get('/api/orders/:id',auth,asyncRoute(createOrderDetailHandler(pool)));
 app.put('/api/orders/:id/review',auth,asyncRoute(createOrderReviewHandler(pool)));
-app.post('/api/orders/:id/transition',auth,asyncRoute(createOrderTransitionHandler(pool)));
+app.post('/api/orders/:id/transition',auth,asyncRoute(createOrderTransitionHandler(pool,storage)));
 app.post('/api/orders/:id/issues',auth,asyncRoute(createOrderIssueHandler(pool)));
 app.get('/api/order-issues/mine',auth,asyncRoute(createMyOrderIssuesHandler(pool)));
 app.post('/api/orders/:id/deliverables',role('seller'),asyncRoute(createDeliverableHandler(pool)));
-app.post('/api/seller/applications',auth,asyncRoute(createRoleApplicationHandler(pool)));
+app.post('/api/seller/applications',applicationIpLimit,auth,applicationUserLimit,asyncRoute(createRoleApplicationHandler(pool)));
 app.get('/api/seller/applications/mine',auth,asyncRoute(createMyRoleApplicationsHandler(pool)));
 app.get('/api/seller/services',role('seller'),asyncRoute(async(_req,res)=>{const r=await pool.query('SELECT s.*,c.name category_name FROM services s JOIN categories c ON c.id=s.category_id WHERE seller_id=$1 ORDER BY created_at DESC',[res.locals.user.id]);res.json({services:r.rows});}));
 app.get('/api/seller/profile',role('seller'),asyncRoute(async(_req,res)=>{const r=await pool.query('SELECT contact_phone,portfolio_url FROM users WHERE id=$1',[res.locals.user.id]);res.json(r.rows[0]);}));
@@ -132,5 +134,5 @@ app.get('/api/admin/issues',role('admin'),asyncRoute(createAdminIssueListHandler
 app.post('/api/admin/issues/:id/resolve',role('admin'),asyncRoute(createResolveOrderIssueHandler(pool)));
 app.get('/api/admin/events',role('admin'),asyncRoute(async(_req,res)=>res.json({events:(await pool.query('SELECT e.*,u.display_name actor_name FROM audit_events e JOIN users u ON u.id=e.actor_id ORDER BY e.created_at DESC LIMIT 100')).rows})));
 if(process.env.NODE_ENV==='production'){const web=path.resolve('dist');app.use(express.static(web));app.get('*',(req,res,next)=>req.path.startsWith('/api/')?next():res.sendFile(path.join(web,'index.html')));}
-app.use((err:unknown,_req:Request,res:Response,_next:NextFunction)=>{if(err instanceof ZodError)return res.status(400).json({error:'VALIDATION',issues:err.issues.map(i=>({path:i.path,message:i.message}))});const e=err as {status?:number;code?:string;message?:string};if(e.code==='LIMIT_FILE_SIZE')return res.status(413).json({error:'UPLOAD_LIMIT',message:UPLOAD_LIMIT_MESSAGE});if(e.code?.startsWith('LIMIT_'))return res.status(413).json({error:'UPLOAD_LIMIT'});if(e.code==='22P02')return res.status(400).json({error:'INVALID_ID'});res.status(e.status|| (e.code==='23505'?409:500)).json({error:e.code||'INTERNAL_ERROR',message:e.status?e.message:undefined});});
-const start=async()=>{const r=await pool.query('select current_database() db,current_user role');if(r.rows[0].db!=='mie_sukses_marketplace'||r.rows[0].role!=='marketplace_app')throw new Error('Refusing startup: expected local mie_sukses_marketplace as marketplace_app.');app.listen(port,'127.0.0.1',()=>console.log(`API listening on http://127.0.0.1:${port} (${r.rows[0].db})`));};void start().catch(e=>{console.error('Startup failed:',e.message);process.exit(1);});
+app.use(apiErrorHandler);
+const start=async()=>{const r=await pool.query('select current_database() db,current_user role');const url=new URL(process.env.DATABASE_URL!);if(r.rows[0].db!==decodeURIComponent(url.pathname.slice(1))||r.rows[0].role!==decodeURIComponent(url.username))throw new Error('Refusing startup: connected database and role do not match DATABASE_URL.');const server=app.listen(port,host,()=>console.log(`API listening on ${host}:${port}`));let shuttingDown=false;const shutdown=(signal:string)=>{if(shuttingDown)return;shuttingDown=true;console.log(`${signal} received; draining HTTP requests.`);server.close(error=>{void pool.end().then(()=>{if(error){console.error('HTTP server shutdown failed.');process.exitCode=1;}else console.log('HTTP server and database pool closed.');}).catch(()=>{console.error('Database pool shutdown failed.');process.exitCode=1;});});};process.once('SIGTERM',()=>shutdown('SIGTERM'));process.once('SIGINT',()=>shutdown('SIGINT'));server.once('error',()=>{if(!shuttingDown){shuttingDown=true;void pool.end().catch(()=>{});process.exitCode=1;}});};void start().catch(async()=>{console.error('Startup failed.');try{await pool.end();}catch{}process.exitCode=1;});

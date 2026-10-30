@@ -37,14 +37,14 @@ describe('shared UI labels and financial formatting',()=>{
   expect(statusTone('approved')).toBe('success');
   expect(statusTone('completed')).toBe('success');
   expect(statusTone('resolved')).toBe('success');
-  expect(statusTone('work_submitted')).toBe('success');
+  expect(statusTone('work_submitted')).toBe('purple');
   expect(statusTone('approved')).toBe('success');
   expect(statusTone('pending')).toBe('warning');
-  expect(statusTone('under_dispute')).toBe('warning');
+  expect(statusTone('under_dispute')).toBe('orange');
   expect(statusTone('cancelled')).toBe('danger');
   expect(statusTone('rejected')).toBe('danger');
   expect(statusTone('refunded')).toBe('danger');
-  expect(statusTone('awaiting_payment')).toBe('warning');
+  expect(statusTone('awaiting_payment')).toBe('neutral');
   expect(statusTone('reversed')).toBe('danger');
  });
  it('keeps payment state distinct and identifies confirmed refund events',()=>{

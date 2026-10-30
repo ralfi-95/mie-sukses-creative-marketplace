@@ -1,11 +1,15 @@
 import 'dotenv/config';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { pool } from './pool.js';
+import pg from 'pg';
+import { connectionConfig } from './connectionConfig.js';
+const { Pool } = pg;
+const pool = new Pool(connectionConfig(process.env.DATABASE_URL_UNPOOLED || process.env.DATABASE_URL, 'migration'));
 try {
  const target = await pool.query('select current_database() as db, current_user as role');
- if (target.rows[0].db !== 'mie_sukses_marketplace'||target.rows[0].role!=='marketplace_app') throw new Error(`Refusing migration: expected local mie_sukses_marketplace as marketplace_app; connected as ${target.rows[0].role} to ${target.rows[0].db}.`);
- console.log(`Verified local target: ${target.rows[0].db} as ${target.rows[0].role}`);
+ const configuredUrl = new URL(process.env.DATABASE_URL_UNPOOLED || process.env.DATABASE_URL!);
+ if (target.rows[0].db !== decodeURIComponent(configuredUrl.pathname.slice(1)) || target.rows[0].role !== decodeURIComponent(configuredUrl.username)) throw new Error('Refusing migration: connected database and role do not match the configured URL.');
+ console.log('Verified configured migration target.');
  const client = await pool.connect();
  try {
   await client.query('BEGIN');

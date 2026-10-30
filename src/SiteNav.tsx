@@ -3,6 +3,7 @@ import { Link, NavLink, useLocation } from 'react-router-dom';
 import { roleLabel } from './format';
 import { ThemeToggle } from './FinalFeatures';
 import { roleNavItems } from './navigation';
+import { MediaAvatar } from './MediaAvatar';
 
 type User = { id: string; display_name: string; role: string; avatar_path?: string | null };
 type NavIndicator = { left: number; top: number; width: number; visible: boolean; animated: boolean };
@@ -60,7 +61,7 @@ export function SiteNav({ user, cartCount }: { user: User | null; cartCount: num
     </NavLink>
     <ThemeToggle />
     {user ? <span className="nav-account"><Link className={`account-link ${pathname === '/profile' ? 'active' : ''}`} to="/profile" aria-label={`${user.display_name} profile`}>
-      {user.avatar_path ? <img className="nav-avatar" src={user.avatar_path} alt="" /> : <span className="avatar-fallback">{user.display_name.slice(0, 1).toUpperCase()}</span>}
+      <MediaAvatar className="nav-avatar" src={user.avatar_path} name={user.display_name} />
       <span className="account-name">{user.display_name}<small className={`role-badge ${user.role}`}>{roleLabel(user.role)}</small></span>
     </Link></span> : <span className="auth-nav"><NavLink to="/login" className={active}>Login</NavLink><NavLink to="/register" className="button small">Register</NavLink></span>}
     <span className={`nav-active-indicator${indicator?.animated ? ' is-animated' : ''}`} aria-hidden="true" style={{ width: indicator?.width ?? 0, opacity: indicator?.visible ? 1 : 0, transform: `translate3d(${indicator?.left ?? 0}px,${indicator?.top ?? 0}px,0)` }} />

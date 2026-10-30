@@ -29,7 +29,7 @@ describe('order history timeline', () => {
 
   it('maps order states to their semantic badge tones', () => {
     expect(Object.fromEntries(['pending', 'awaiting_payment', 'accepted', 'in_progress', 'work_submitted', 'completed', 'cancelled', 'refunded', 'rejected', 'under_dispute'].map(status => [status, statusTone(status)]))).toEqual({
-      pending: 'neutral', awaiting_payment: 'neutral', accepted: 'info', in_progress: 'warning', work_submitted: 'purple',
+      pending: 'warning', awaiting_payment: 'neutral', accepted: 'info', in_progress: 'warning', work_submitted: 'purple',
       completed: 'success', cancelled: 'danger', refunded: 'danger', rejected: 'danger', under_dispute: 'orange',
     });
   });

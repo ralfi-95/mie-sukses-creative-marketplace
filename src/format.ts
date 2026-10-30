@@ -12,7 +12,7 @@ const titleCase=(value:string)=>value.replaceAll('_',' ').replace(/\b\w/g,letter
 export function statusTone(status:string){
  if(['paid','completed','resolved','approved','released','simulated'].includes(status))return 'success';
  if(['accepted'].includes(status))return 'info';
- if(['in_progress','payout_reserved','open'].includes(status))return 'warning';
+ if(['pending','in_progress','payout_reserved','open'].includes(status))return 'warning';
  if(status==='work_submitted')return 'purple';
  if(['cancelled','rejected','refunded','reversed','failed'].includes(status))return 'danger';
  if(status==='under_dispute')return 'orange';

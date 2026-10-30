@@ -1,6 +1,8 @@
 node_modules/
 dist/
 .env
+.env.*
+!.env.example
 storage/
 coverage/
 *.log
@@ -15,3 +17,4 @@ references/
 
 # Local reference files
 references/
+.neon

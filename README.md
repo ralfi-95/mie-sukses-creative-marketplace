@@ -42,6 +42,7 @@ Open <http://127.0.0.1:5173>. Seed creates four synthetic public listings and lo
 ## Configuration
 
 - `DATABASE_URL`: local `marketplace_app` PostgreSQL connection string.
+- For Neon hosting, set `DATABASE_URL` to Neon's pooled URL and `DATABASE_URL_UNPOOLED` to its direct URL for migrations. Keep both server-side; `db:migrate` is a manual schema-changing operation.
 - `SESSION_SECRET`: random session signing secret, minimum 32 characters.
 - `PORT`: API port, default `3000`.
 - `WEB_ORIGIN`: allowed browser origin, default `http://127.0.0.1:5173`.
