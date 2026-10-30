@@ -1,4 +1,4 @@
-type RoleNavItem = { label: string; to: string; children?: RoleNavItem[] };
+type RoleNavItem = { label: string; to: string };
 
 export function roleNavItems(role?: string): RoleNavItem[] {
   if (role === 'seller') return [
@@ -9,10 +9,7 @@ export function roleNavItems(role?: string): RoleNavItem[] {
   if (role === 'admin') return [
     { label: 'Administrative History', to: '/admin/transactions' },
     { label: 'Issues', to: '/admin/issues' },
-    { label: 'Administration', to: '', children: [
-      { label: 'Service Moderation', to: '/admin/services' },
-      { label: 'Role Application', to: '/admin' },
-    ] },
+    { label: 'Administration', to: '/admin' },
   ];
   return [];
 }

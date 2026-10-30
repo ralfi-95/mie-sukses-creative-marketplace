@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { orderStatusLabel, paymentMethodLabel, roleLabel, signedRupiah, signedTransactionRupiah, statusTone, transactionStatusLabel, transactionTypeLabel } from './format.js';
+import { formatRupiah, orderStatusLabel, paymentMethodLabel, roleLabel, signedRupiah, signedTransactionRupiah, statusTone, transactionStatusLabel, transactionTypeLabel } from './format.js';
 
 describe('shared UI labels and financial formatting',()=>{
  it('maps internal order and role values to readable labels',()=>{
@@ -16,6 +16,13 @@ describe('shared UI labels and financial formatting',()=>{
   expect(signedTransactionRupiah('refund',50000)).toContain('+');
   expect(signedTransactionRupiah('refund',-50000)).toContain('−');
  });
+ it('formats Rupiah without a gap after the currency symbol',()=>{
+  expect(formatRupiah(100000)).toBe('Rp100.000');
+  expect(formatRupiah(10000)).toBe('Rp10.000');
+  expect(formatRupiah(1500000n)).toBe('Rp1.500.000');
+  expect(formatRupiah(0)).toBe('Rp0');
+  expect(formatRupiah(-10000)).toBe('-Rp10.000');
+ });
  it('maps ledger labels and transaction directions from signed amounts',()=>{
   expect(transactionTypeLabel('payout_reserved')).toBe('Payout Reserved');
   expect(transactionTypeLabel('order_earning')).toBe('Order Earning');
@@ -27,10 +34,13 @@ describe('shared UI labels and financial formatting',()=>{
   expect(statusTone('pending')).toBe('warning');
   expect(statusTone('in_progress')).toBe('warning');
   expect(statusTone('paid')).toBe('success');
+  expect(statusTone('approved')).toBe('success');
   expect(statusTone('completed')).toBe('success');
   expect(statusTone('resolved')).toBe('success');
   expect(statusTone('work_submitted')).toBe('success');
-  expect(statusTone('under_dispute')).toBe('danger');
+  expect(statusTone('approved')).toBe('success');
+  expect(statusTone('pending')).toBe('warning');
+  expect(statusTone('under_dispute')).toBe('warning');
   expect(statusTone('cancelled')).toBe('danger');
   expect(statusTone('rejected')).toBe('danger');
   expect(statusTone('refunded')).toBe('danger');

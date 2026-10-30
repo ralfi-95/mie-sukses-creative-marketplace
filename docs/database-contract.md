@@ -518,6 +518,14 @@ The `checkout_cart` operation must execute as one transaction.
 
 A concurrent attempt to change a service or seller state must not bypass checkout validation.
 
+### 16.1 Simulated payment attempts
+
+- A checkout payment remains `awaiting_payment` while its orders remain `pending`. Changing the simulated method updates that checkout payment only; it must not create another batch or order.
+- Cancelling an unfinished checkout attempt rotates its payment attempt key. Confirmation and method changes must present the current key, so a stale screen cannot settle after cancellation. Cancellation leaves the checkout and orders unpaid.
+- `wallet_topup_sessions` records an authenticated user's simulated top-up amount and selected method before confirmation. Only an `awaiting_payment` session can complete or cancel. These outcomes are mutually exclusive, and only completion creates a completed `top_up` wallet transaction.
+- Pending or cancelled top-up sessions do not contribute to wallet balance. Replayed confirmation of a completed session returns its original wallet transaction; cancelled sessions cannot be confirmed.
+- Checkout wallet payment and top-up confirmation lock their authoritative records and write the wallet transaction, payment state, order events, and audit data atomically.
+
 ## 17. Order State Machine
 
 Normal transitions:

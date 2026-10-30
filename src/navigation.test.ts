@@ -5,10 +5,10 @@ describe('role-specific navigation', () => {
   it('keeps seller tools after shared navigation in the requested order', () => {
     expect(roleNavItems('seller').map(item => item.label)).toEqual(['My Services', 'Projects', 'Sales']);
   });
-  it('shows only the approved admin tools inside Administration', () => {
+  it('routes Administration directly to its own page', () => {
     const items = roleNavItems('admin');
     expect(items.slice(0, 2).map(item => item.label)).toEqual(['Administrative History', 'Issues']);
-    expect(items[2].children?.map(item => item.label)).toEqual(['Service Moderation', 'Role Application']);
+    expect(items[2]).toEqual({ label: 'Administration', to: '/admin' });
     expect(roleNavItems('buyer')).toEqual([]);
   });
 });

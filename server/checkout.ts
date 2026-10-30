@@ -9,7 +9,7 @@ import { checkoutTotals } from './pricing.js';
 export const checkoutBodySchema=z.object({
  idempotencyKey:z.string().uuid(),
  email:z.string().trim().email().max(254),
- items:z.array(z.object({serviceId:z.string().uuid(),phone:z.string().trim().max(30).optional().refine(value=>value===undefined||isValidPhone(value)),projectBrief:z.string().trim().min(1).max(10000)})).min(1),
+ items:z.array(z.object({serviceId:z.string().uuid(),phone:z.string().trim().min(1).max(30).optional().refine(value=>value===undefined||isValidPhone(value),{message:'Enter a valid Indonesian phone number.'}),projectBrief:z.string().trim().min(1).max(10000)})).min(1),
  paymentMethod:z.enum(['bank_transfer','e_wallet','qris','me_wallet']),
  provider:z.string().trim().max(40).optional(),
 }).superRefine((body,ctx)=>{if((body.paymentMethod==='bank_transfer'&&!banks.includes(body.provider||''))||(body.paymentMethod==='e_wallet'&&!wallets.includes(body.provider||'')))ctx.addIssue({code:'custom',path:['provider'],message:'Choose a supported simulated provider.'});});
@@ -53,7 +53,7 @@ export function createCheckoutHandler(db:Pick<Pool,'connect'>){
    for(const request of requests){
     const value=request.phone||account.rows[0].contact_phone;
     if(!value)throw Object.assign(new Error('Add a contact phone to your profile or checkout details.'),{status:400,code:'CONTACT_PHONE_REQUIRED'});
-    try{phoneByService.set(request.serviceId,normalizePhone(value));}catch{throw Object.assign(new Error('Enter a valid contact phone.'),{status:400,code:'INVALID_CONTACT_PHONE'});}
+    try{phoneByService.set(request.serviceId,normalizePhone(value));}catch{if(request.phone!==undefined)throw Object.assign(new Error('Enter a valid contact phone.'),{status:400,code:'INVALID_CONTACT_PHONE'});phoneByService.set(request.serviceId,String(value));}
    }
    if(!account.rows[0].contact_phone){const firstPhone=phoneByService.values().next().value;await client.query('UPDATE users SET contact_phone=$1 WHERE id=$2 AND contact_phone IS NULL',[firstPhone,buyer]);}
    const batch=await client.query('INSERT INTO checkout_batches(buyer_id,idempotency_key,request_fingerprint) VALUES($1,$2,$3) RETURNING id',[buyer,idempotencyKey,requestFingerprint]);

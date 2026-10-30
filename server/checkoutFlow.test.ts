@@ -55,4 +55,11 @@ describe('checkout business calculations',()=>{
   const changed=await request(t.app).post('/checkout').send({...body,items:body.items.map((item,index)=>index?item:{...item,projectBrief:'Different requirements for this order.'})});
   expect(changed.status).toBe(409);
  });
+ it('keeps an unchanged legacy profile phone usable without rewriting it',async()=>{
+  const legacyPhone='+1 202 555 0100',t=endpoint('1000000',legacyPhone),items=body.items.map(({phone,...item})=>item);
+  const response=await request(t.app).post('/checkout').send({...body,items});
+  expect(response.status).toBe(201);
+  expect(response.body.orders[0].buyer_phone_snapshot).toBe(legacyPhone);
+  expect(t.calls.some(c=>c.sql.startsWith('UPDATE users SET contact_phone'))).toBe(false);
+ });
 });

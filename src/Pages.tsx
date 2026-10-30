@@ -5,6 +5,8 @@ import { supabase } from './lib/supabase'
 import { ServiceThumbnail } from './components/ServiceThumbnail'
 import { normalizeGoogleDriveUrl } from './lib/googleDriveUrl'
 import { SiteHeader } from './components/SiteHeader'
+import { formatRupiah } from './format'
+import { categoryDisplayName } from './categoryLabels'
 
 function AuthForm({ register = false }: { register?: boolean }) {
   const { user, loading, configurationStatus, signOutError, signIn, signUp } = useAuth()
@@ -253,7 +255,7 @@ export function AdminOrdersPage() {
     <section className="panel admin-orders"><h2>Listing jasa</h2>{listings.map((listing) => <article className="order-row" key={listing.id}><div className="order-row-heading"><strong>{listing.title}</strong><span className="status-chip">{listing.status.toUpperCase()}</span></div><small>Seller {listing.seller_id.slice(0, 8)}</small>{listing.status !== 'archived' && <button className="button button-quiet" disabled={busyId === listing.id} onClick={() => void removeListing(listing)}>Hapus listing</button>}</article>)}</section>
     <header className="page-heading"><p className="eyebrow">PEMBAYARAN DEMO</p><h2>Antrean pesanan</h2><p>Konfirmasi ini hanya simulasi dan tidak memproses uang sungguhan.</p></header>
     <section className="panel admin-orders" aria-live="polite">
-      {loading ? <p role="status">Memuat pesanan…</p> : message && !orders.length ? <p className="page-feedback error-panel" role="alert">{message}</p> : orders.length ? <ul className="order-list">{orders.map((order) => <li className="order-row" key={order.id}><div className="order-row-heading"><h2><Link to={`/orders/${order.id}`}>{order.order_items.map((item) => item.title_snapshot).join(', ') || `Pesanan ${order.id}`}</Link></h2><span className="status-chip">{orderStatusText[order.status] ?? order.status}</span></div><p>Pembayaran demo: <strong>{paymentStatusText[order.payment_status] ?? order.payment_status}</strong></p><p>Rp{BigInt(order.total_idr).toLocaleString('id-ID')} · {new Date(order.placed_at).toLocaleString('id-ID')}</p><small>Pembeli {order.buyer_id} · Seller {order.seller_id}</small>
+      {loading ? <p role="status">Memuat pesanan…</p> : message && !orders.length ? <p className="page-feedback error-panel" role="alert">{message}</p> : orders.length ? <ul className="order-list">{orders.map((order) => <li className="order-row" key={order.id}><div className="order-row-heading"><h2><Link to={`/orders/${order.id}`}>{order.order_items.map((item) => item.title_snapshot).join(', ') || `Pesanan ${order.id}`}</Link></h2><span className="status-chip">{orderStatusText[order.status] ?? order.status}</span></div><p>Pembayaran demo: <strong>{paymentStatusText[order.payment_status] ?? order.payment_status}</strong></p><p>{formatRupiah(order.total_idr)} · {new Date(order.placed_at).toLocaleString('id-ID')}</p><small>Pembeli {order.buyer_id} · Seller {order.seller_id}</small>
         {order.status === 'awaiting_payment' && ['unpaid', 'pending'].includes(order.payment_status) && <div className="form-actions"><button className="button button-dark" disabled={busyId === order.id} onClick={() => void confirmPayment(order.id, 'paid')}>Konfirmasi demo berhasil</button><button className="button button-outline" disabled={busyId === order.id} onClick={() => void confirmPayment(order.id, 'failed')}>Tandai demo gagal</button></div>}
         {order.status === 'awaiting_payment' && ['unpaid', 'failed'].includes(order.payment_status) && <button className="button button-quiet" disabled={busyId === order.id} onClick={() => void cancelOrder(order.id)}>Batalkan pesanan</button>}
       </li>)}</ul> : <div className="empty-state"><h2>Belum ada pesanan</h2><p>Pesanan buyer akan muncul setelah checkout.</p></div>}
@@ -407,15 +409,15 @@ export function CartPage() {
     {loading ? <p role="status">Loading cart…</p> : cart?.cart_items.length ? <>
       <ul>{cart.cart_items.map((item) => <li key={item.service_id}>
         <strong>{item.creative_services?.title ?? 'Listing no longer available'}</strong>
-        <span>{item.creative_services ? ` · Rp${BigInt(item.creative_services.price_idr).toLocaleString('id-ID')} · ${item.creative_services.delivery_days} days` : ''}</span>
+        <span>{item.creative_services ? ` · ${formatRupiah(item.creative_services.price_idr)} · ${item.creative_services.delivery_days} days` : ''}</span>
         <button type="button" disabled={busy} onClick={() => void removeItem(item.service_id)}>Remove</button>
       </li>)}</ul>
-      <p>Current estimate: Rp{total.toLocaleString('id-ID')}. Prices and eligibility are revalidated at checkout.</p>
+      <p>Current estimate: {formatRupiah(total)}. Prices and eligibility are revalidated at checkout.</p>
       {retry ? <button className="button button-dark" disabled={busy} onClick={() => void checkout(retry)}>{busy?'Retrying…':'Recover previous checkout'}</button>
         : <button className="button button-dark" disabled={busy} onClick={() => void checkout()}>{busy?'Checking out…':'Checkout'}</button>}
     </> : <><p>Your active cart is empty.</p>{retry && <button className="button button-dark" disabled={busy} onClick={() => void checkout(retry)}>{busy?'Recovering…':'Recover previous checkout'}</button>}</>}
     {message && <p className="auth-feedback" role="status">{message}</p>}
-    {orders.length>0 && <><p>Orders were saved to your account.</p><ul aria-label="Seller orders">{orders.map((order)=><li key={order.id}><Link to={`/orders/${order.id}`}>Order {order.id}: Rp{BigInt(order.total_idr).toLocaleString('id-ID')}</Link></li>)}</ul></>}
+    {orders.length>0 && <><p>Orders were saved to your account.</p><ul aria-label="Seller orders">{orders.map((order)=><li key={order.id}><Link to={`/orders/${order.id}`}>Order {order.id}: {formatRupiah(order.total_idr)}</Link></li>)}</ul></>}
     <p><Link to="/orders">Order history</Link> · <Link to="/">Continue browsing</Link></p>
   </section></main>
 }
@@ -477,7 +479,7 @@ export function ServiceDetailPage() {
     {loading ? <p className="auth-message" role="status">Loading service…</p> : error || !service
       ? <section className="panel error-panel"><h1>Service unavailable</h1><p>{error || 'This service could not be loaded.'}</p><Link className="button button-dark" to="/">Browse services</Link></section>
       : <>
-        <header className="page-heading"><p className="eyebrow">{serviceCategory?.name}</p><h1>{service.title}</h1><p>{service.short_summary}</p></header>
+        <header className="page-heading"><p className="eyebrow">{categoryDisplayName(serviceCategory?.name)}</p><h1>{service.title}</h1><p>{service.short_summary}</p></header>
         <div className="service-detail-layout">
           <div className="service-detail-main">
             <div className="service-gallery service-gallery--default"><ServiceThumbnail category={serviceCategory?.name ?? ''} alt={`${service.title} category thumbnail`} /></div>
@@ -487,7 +489,7 @@ export function ServiceDetailPage() {
             <section className="detail-section"><p className="eyebrow">DELIVERABLES</p><h2>Included in the service</h2><p>{service.deliverables}</p></section>
             <section className="detail-section"><p className="eyebrow">CREATED BY</p><h2>{sellerName}</h2><p>Independent creative seller</p></section>
           </div>
-          <aside className="service-purchase"><p className="eyebrow">STARTING AT</p><strong>Rp{BigInt(service.price_idr).toLocaleString('id-ID')}</strong><p>Delivery in {service.delivery_days} days</p><button className="button button-dark" disabled={busy} onClick={() => void addToCart()}>{busy ? 'Adding…' : 'Add to cart'}</button>{message && <p className="auth-feedback" role="status">{message}</p>}</aside>
+          <aside className="service-purchase"><p className="eyebrow">STARTING AT</p><strong>{formatRupiah(service.price_idr)}</strong><p>Delivery in {service.delivery_days} days</p><button className="button button-dark" disabled={busy} onClick={() => void addToCart()}>{busy ? 'Adding…' : 'Add to cart'}</button>{message && <p className="auth-feedback" role="status">{message}</p>}</aside>
         </div>
       </>}
   </main>
@@ -527,7 +529,7 @@ export function BuyerOrdersPage() {
     return () => { active = false }
   }, [user])
   return <main className="auth-page"><section className="auth-card"><Link className="auth-brand" to="/dashboard">Kembali ke dashboard</Link><h1>Riwayat pesanan</h1><p>Semua status pembayaran di sini adalah simulasi. Tidak ada pembayaran uang sungguhan.</p>
-    {loading ? <p role="status">Memuat pesanan…</p> : error ? <p className="auth-feedback" role="alert">{error}</p> : orders.length ? <ul>{orders.map((order) => <li key={order.id}><p><Link to={`/orders/${order.id}`}><strong>{order.order_items.map((item) => item.title_snapshot).join(', ') || `Pesanan ${order.id}`}</strong></Link></p><p>{orderStatusText[order.status] ?? order.status} · Pembayaran demo: {paymentStatusText[order.payment_status] ?? order.payment_status} · Rp{BigInt(order.total_idr).toLocaleString('id-ID')}</p><small>{new Date(order.placed_at).toLocaleString('id-ID')}</small></li>)}</ul> : <p>Belum ada pesanan. Pesanan yang dibuat saat checkout akan muncul di sini.</p>}
+    {loading ? <p role="status">Memuat pesanan…</p> : error ? <p className="auth-feedback" role="alert">{error}</p> : orders.length ? <ul>{orders.map((order) => <li key={order.id}><p><Link to={`/orders/${order.id}`}><strong>{order.order_items.map((item) => item.title_snapshot).join(', ') || `Pesanan ${order.id}`}</strong></Link></p><p>{orderStatusText[order.status] ?? order.status} · Pembayaran demo: {paymentStatusText[order.payment_status] ?? order.payment_status} · {formatRupiah(order.total_idr)}</p><small>{new Date(order.placed_at).toLocaleString('id-ID')}</small></li>)}</ul> : <p>Belum ada pesanan. Pesanan yang dibuat saat checkout akan muncul di sini.</p>}
     <p><Link to="/">Jelajahi jasa</Link></p></section></main>
 }
 
@@ -583,8 +585,8 @@ export function OrderDetailPage() {
   if (loading) return <p className="auth-message" role="status">Memuat detail pesanan…</p>
   return <main className="auth-page"><section className="auth-card"><Link className="auth-brand" to={isBuyer ? '/orders' : '/seller'}>Kembali ke pesanan</Link><h1>Detail pesanan</h1>
     {message && <p className="auth-feedback" role={order ? 'status' : 'alert'}>{message}</p>}
-    {!order ? null : <><p>Status: <strong>{orderStatusText[order.status] ?? order.status}</strong></p><p>Status pembayaran: <strong>DEMO / SIMULASI — {paymentStatusText[order.payment_status] ?? order.payment_status}</strong></p><p>Total: Rp{BigInt(order.total_idr).toLocaleString('id-ID')}</p><p>Dibuat: {new Date(order.placed_at).toLocaleString('id-ID')}</p>
-      <h2>Item pesanan</h2><ul>{order.order_items.map((item, index) => <li key={`${item.title_snapshot}-${index}`}><strong>{item.title_snapshot}</strong><p>{item.category_snapshot} · Rp{BigInt(item.unit_price_idr).toLocaleString('id-ID')} · {item.delivery_days_snapshot} hari</p><p>{item.description_snapshot}</p><p>Hasil: {item.deliverables_snapshot}</p></li>)}</ul>
+    {!order ? null : <><p>Status: <strong>{orderStatusText[order.status] ?? order.status}</strong></p><p>Status pembayaran: <strong>DEMO / SIMULASI — {paymentStatusText[order.payment_status] ?? order.payment_status}</strong></p><p>Total: {formatRupiah(order.total_idr)}</p><p>Dibuat: {new Date(order.placed_at).toLocaleString('id-ID')}</p>
+      <h2>Item pesanan</h2><ul>{order.order_items.map((item, index) => <li key={`${item.title_snapshot}-${index}`}><strong>{item.title_snapshot}</strong><p>{categoryDisplayName(item.category_snapshot)} · {formatRupiah(item.unit_price_idr)} · {item.delivery_days_snapshot} hari</p><p>{item.description_snapshot}</p><p>Hasil: {item.deliverables_snapshot}</p></li>)}</ul>
       {isBuyer && order.status === 'awaiting_payment' && order.payment_status !== 'pending' && <button className="button button-dark" disabled={busy} onClick={() => void startPayment()}>Mulai pembayaran demo</button>}
       {isBuyer && order.status === 'awaiting_payment' && order.payment_status === 'pending' && <p>Pembayaran simulasi menunggu konfirmasi admin. Jangan mengirim uang sungguhan.</p>}
       <h2>Hasil kerja</h2>{order.order_deliverables.length ? <ul>{order.order_deliverables.map((item, index) => <li key={`${item.title}-${index}`}><strong>{item.title}</strong><p><a href={item.drive_url} target="_blank" rel="noopener noreferrer">Buka hasil di Google Drive</a></p>{item.notes && <p>{item.notes}</p>}<small>{new Date(item.created_at).toLocaleString('id-ID')}</small></li>)}</ul> : <p>Belum ada hasil yang dikirim.</p>}
@@ -817,5 +819,5 @@ export function SellerPage() {
 }
 
 function ListingForm({ categories, listing, busy, onSave }: { categories: SellerCategory[]; listing?: SellerListing; busy: boolean; onSave: (event: FormEvent<HTMLFormElement>) => void }) {
-  return <form className="listing-form" onSubmit={onSave}><label>Judul<input name="title" required maxLength={120} defaultValue={listing?.title ?? ''} /></label><label>Ringkasan<input name="summary" required maxLength={300} defaultValue={listing?.short_summary ?? ''} /></label><label>Deskripsi<textarea name="description" required maxLength={5000} defaultValue={listing?.description ?? ''} /></label><label>Hasil yang diterima<textarea name="deliverables" required maxLength={2000} defaultValue={listing?.deliverables ?? ''} /></label><label>Kategori<select name="category" required defaultValue={listing?.category_id ?? ''}><option value="" disabled>Pilih kategori</option>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label><label>Harga (IDR)<input name="price" type="number" min="1" step="1" required defaultValue={listing?.price_idr ?? ''} /></label><label>Durasi (hari)<input name="days" type="number" min="1" max="32767" step="1" required defaultValue={listing?.delivery_days ?? ''} /></label><button className="button button-dark" disabled={busy}>{listing ? 'Simpan perubahan' : 'Simpan sebagai draft'}</button></form>
+  return <form className="listing-form" onSubmit={onSave}><label>Judul<input name="title" required maxLength={120} defaultValue={listing?.title ?? ''} /></label><label>Ringkasan<input name="summary" required maxLength={300} defaultValue={listing?.short_summary ?? ''} /></label><label>Deskripsi<textarea name="description" required maxLength={5000} defaultValue={listing?.description ?? ''} /></label><label>Hasil yang diterima<textarea name="deliverables" required maxLength={2000} defaultValue={listing?.deliverables ?? ''} /></label><label>Kategori<select name="category" required defaultValue={listing?.category_id ?? ''}><option value="" disabled>Pilih kategori</option>{categories.map((category) => <option key={category.id} value={category.id}>{categoryDisplayName(category.name)}</option>)}</select></label><label>Harga (IDR)<input name="price" type="number" min="1" step="1" required defaultValue={listing?.price_idr ?? ''} /></label><label>Durasi (hari)<input name="days" type="number" min="1" max="32767" step="1" required defaultValue={listing?.delivery_days ?? ''} /></label><button className="button button-dark" disabled={busy}>{listing ? 'Simpan perubahan' : 'Simpan sebagai draft'}</button></form>
 }
