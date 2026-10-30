@@ -1,6 +1,5 @@
 import type { Request, Response } from 'express';
 import type { Pool } from 'pg';
-import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { DEMO_PAYMENT_PIN, supportedBanks, supportedWallets } from './paymentSimulation.js';
 
@@ -17,12 +16,19 @@ export function createPaymentAttemptCancellationHandler(db:Pick<Pool,'connect'>)
    if(!orders.rowCount)throw Object.assign(new Error('Checkout batch not found.'),{status:404});
    const payment=await client.query('SELECT * FROM checkout_payments WHERE checkout_batch_id=$1 AND buyer_id=$2 FOR UPDATE',[req.params.batchId,user.id]);
    if(!payment.rowCount)throw Object.assign(new Error('Payment record not found.'),{status:404});
-   if(payment.rows[0].status!=='awaiting_payment'||orders.rows.some((order:{status:string})=>order.status!=='pending'))throw Object.assign(new Error('This payment can no longer be cancelled.'),{status:409});
    if((payment.rows[0].idempotency_key??null)!==body.attemptKey)throw Object.assign(new Error('This payment attempt is no longer current.'),{status:409});
-   const attemptKey=randomUUID();
-   await client.query("UPDATE checkout_payments SET idempotency_key=$2 WHERE id=$1 AND status='awaiting_payment'",[payment.rows[0].id,attemptKey]);
+   if(payment.rows[0].status==='cancelled'){
+    await client.query('COMMIT');
+    return res.json({ok:true,status:'cancelled',replayed:true});
+   }
+   if(payment.rows[0].status!=='awaiting_payment'||orders.rows.some((order:{status:string})=>order.status!=='pending'))throw Object.assign(new Error('This payment can no longer be cancelled.'),{status:409});
+   const cancelledPayment=await client.query("UPDATE checkout_payments SET status='cancelled' WHERE id=$1 AND status='awaiting_payment' RETURNING id",[payment.rows[0].id]);
+   if(!cancelledPayment.rowCount)throw Object.assign(new Error('This payment can no longer be cancelled.'),{status:409});
+   const cancelledOrders=await client.query("WITH cancelled AS (UPDATE orders SET status='cancelled',updated_at=now() WHERE checkout_batch_id=$1 AND buyer_id=$2 AND status='pending' RETURNING id) INSERT INTO order_events(order_id,actor_id,from_status,to_status,reason) SELECT id,$2,'pending','cancelled','Checkout payment cancelled by buyer' FROM cancelled",[req.params.batchId,user.id]);
+   if(cancelledOrders.rowCount!==orders.rowCount)throw Object.assign(new Error('Checkout orders could not be cancelled consistently.'),{status:409});
+   await client.query("INSERT INTO audit_events(actor_id,action,target_type,target_id,details) VALUES($1,'checkout_payment_cancelled','checkout_batch',$2,$3)",[user.id,req.params.batchId,JSON.stringify({amount:payment.rows[0].amount,orderCount:orders.rowCount})]);
    await client.query('COMMIT');
-   res.json({ok:true,status:'awaiting_payment',attemptKey});
+   res.json({ok:true,status:'cancelled',replayed:false});
   }catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
  };
 }

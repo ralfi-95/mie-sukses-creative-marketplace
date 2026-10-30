@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { categoryDisplayName } from './categoryLabels'
+import { categoryDisplayName, parseCategoryResponse } from './categoryLabels'
 
 describe('categoryDisplayName', () => {
   it.each([
@@ -14,4 +14,21 @@ describe('categoryDisplayName', () => {
   it('preserves unknown category labels', () => {
     expect(categoryDisplayName('New Category')).toBe('New Category')
   })
+})
+
+describe('parseCategoryResponse', () => {
+  it('accepts the API category envelope', () => {
+    expect(parseCategoryResponse({ categories: [{ id: 'category-1', slug: 'design', name: 'Desain Grafis' }] }))
+      .toEqual([{ id: 'category-1', slug: 'design', name: 'Desain Grafis' }])
+  })
+
+  it('preserves a genuinely empty category list', () => {
+    expect(parseCategoryResponse({ categories: [] })).toEqual([])
+  })
+
+  it.each([undefined, null, {}, { categories: null }, { categories: [{}] }])(
+    'rejects a missing or malformed categories response (%s)', (response) => {
+      expect(() => parseCategoryResponse(response)).toThrow(/categories service returned/)
+    },
+  )
 })

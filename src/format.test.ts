@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatRupiah, orderStatusLabel, paymentMethodLabel, roleLabel, signedRupiah, signedTransactionRupiah, statusTone, transactionStatusLabel, transactionTypeLabel } from './format.js';
+import { formatRupiah, orderStatusLabel, paymentMethodLabel, roleLabel, signedRupiah, signedTransactionRupiah, statusTone, transactionMetadataLabel, transactionStatusLabel, transactionTypeLabel } from './format.js';
 
 describe('shared UI labels and financial formatting',()=>{
  it('maps internal order and role values to readable labels',()=>{
@@ -50,5 +50,17 @@ describe('shared UI labels and financial formatting',()=>{
  it('keeps payment state distinct and identifies confirmed refund events',()=>{
   expect(transactionStatusLabel('awaiting_payment','order_payment')).toBe('Payment · Awaiting Payment');
   expect(transactionStatusLabel('completed','refund')).toBe('Refunded · Completed');
+ });
+ it('joins transaction metadata with valid UTF-8 separators without altering values',()=>{
+  const orderId='d25dd2b3-7001-4e8e-91cb-2274e7e1f6ca',checkoutId='6aa3a690-abdc-488b-b0fe-918126313824';
+  expect(transactionMetadataLabel('Pencairan dana berhasil',`Order ${orderId}`,`Checkout ${checkoutId}`,transactionStatusLabel('pending'))).toBe(`Pencairan dana berhasil · Order ${orderId} · Checkout ${checkoutId} · Pending`);
+  expect(transactionMetadataLabel('Withdrawal',transactionTypeLabel('top_up'))).toBe('Withdrawal · Top Up');
+  expect(transactionMetadataLabel('30/10/2026, 14.43.26','completed')).toBe('30/10/2026, 14.43.26 · completed');
+  const timestamp=new Date('2026-10-30T07:43:26.000Z').toLocaleString('id-ID',{timeZone:'Asia/Jakarta'});
+  expect(transactionMetadataLabel(timestamp,'completed')).toBe(`${timestamp} · completed`);
+  const userText='Pembayaran berhasil — terima kasih! 🎨';
+  expect(transactionMetadataLabel(userText)).toBe(userText);
+  expect(transactionMetadataLabel('Already correct · punctuation — 🎨')).toBe('Already correct · punctuation — 🎨');
+  expect(transactionMetadataLabel(null,'Order metadata',undefined)).toBe('Order metadata');
  });
 });

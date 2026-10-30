@@ -10,10 +10,12 @@ const labels:Record<string,string>={bank_transfer:'Bank Transfer',e_wallet:'E-Wa
 const titleCase=(value:string)=>value.replaceAll('_',' ').replace(/\b\w/g,letter=>letter.toUpperCase());
 
 export function statusTone(status:string){
- if(['paid','accepted','work_submitted','completed','resolved','approved','released','simulated'].includes(status))return 'success';
- if(['pending','awaiting_payment','in_progress','payout_reserved','open'].includes(status))return 'warning';
+ if(['paid','completed','resolved','approved','released','simulated'].includes(status))return 'success';
+ if(['accepted'].includes(status))return 'info';
+ if(['in_progress','payout_reserved','open'].includes(status))return 'warning';
+ if(status==='work_submitted')return 'purple';
  if(['cancelled','rejected','refunded','reversed','failed'].includes(status))return 'danger';
- if(status==='under_dispute')return 'warning';
+ if(status==='under_dispute')return 'orange';
  return 'neutral';
 }
 export function statusLabel(status:string){return labels[status]||titleCase(status);}
@@ -28,6 +30,10 @@ export function transactionTypeLabel(type:string){return statusLabel(type);}
 export function transactionStatusLabel(status:string,transactionType?:string){
  const state=statusLabel(status);
  return transactionType==='refund'?`Refunded · ${state}`:transactionType==='order_payment'?`Payment · ${state}`:state;
+}
+
+export function transactionMetadataLabel(...parts:Array<string|number|null|undefined|false>){
+ return parts.filter(part=>part!==null&&part!==undefined&&part!==false&&part!=='').join(' · ');
 }
 
 export function ratingSummary(rating:number|string|null|undefined,reviewCount:number|string|undefined,completedCount:number|string|undefined){
