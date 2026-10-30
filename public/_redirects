@@ -1,4 +1,3 @@
-# Replace RENDER_SERVICE_HOSTNAME with the hostname assigned to the Render web service.
-/api/*    https://RENDER_SERVICE_HOSTNAME.onrender.com/api/:splat    200
-/media/* https://RENDER_SERVICE_HOSTNAME.onrender.com/media/:splat 200
-/*       /index.html                                                   200
+/api/*    https://mie-sukses-creative-marketplace.onrender.com/api/:splat    200
+/media/*  https://mie-sukses-creative-marketplace.onrender.com/media/:splat  200
+/*        /index.html  200
