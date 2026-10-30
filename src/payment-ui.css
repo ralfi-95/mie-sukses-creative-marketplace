@@ -40,6 +40,7 @@
 :root[data-theme='dark'] .list-search input,:root[data-theme='dark'] .formcard input,:root[data-theme='dark'] .formcard textarea,:root[data-theme='dark'] .formcard select,:root[data-theme='dark'] .summary input,:root[data-theme='dark'] .summary select{background:#151922;border-color:#4a5263;color:#f1f3f9}
 :root[data-theme='dark'] .description{color:#c2c9d7}:root[data-theme='dark'] .empty{background:#1a1e27;border-color:#343b4b;color:#f1f3f9}:root[data-theme='dark'] .brand-logo{background:transparent}
 :root[data-theme='dark'] .role-application-page .formcard>.button{color:#000}
+:root[data-theme='dark'] .join-actions .button.light,:root[data-theme='dark'] .join-actions .button.light:not(:disabled):hover,:root[data-theme='dark'] .join-actions .button.light:focus-visible,:root[data-theme='dark'] .join-actions .button.light:active{background:#fff;border-color:#fff;color:#163746}
 :root[data-theme='dark'] .footer-section-links a,:root[data-theme='dark'] .footer-contact a{color:#8bdce0}
 @media(max-width:650px){.brand-logo{width:150px;height:45px}.order-history-card{align-items:stretch}.order-details-button{align-self:flex-start}.creator-grid{grid-template-columns:1fr}.admin-shortcuts{grid-template-columns:1fr}.order-timeline{justify-content:flex-start}.timeline-step{min-width:max-content;padding-inline:7px}.footer-section-links{gap:14px}.profile-heading{align-items:flex-start}.order{padding:15px}}
 @media(prefers-reduced-motion:reduce){.card,.button,.creator-card{transition:none!important}}
